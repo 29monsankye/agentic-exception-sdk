@@ -152,6 +152,37 @@ class TestSanitizeContextSnapshot:
         assert isinstance(snap, SafeContextSnapshot)
         assert len(snap.root) <= 100
 
+    def test_secret_value_under_nonsensitive_key_redacted(self):
+        # The key "note" is not sensitive, but an OpenAI-style key embedded in
+        # its value must still be pattern-scanned and redacted.
+        snap = self.tb.sanitize_context_snapshot(
+            {"note": "the key is sk-abcdefghijklmnopqrstuvwxyz012345"}
+        )
+        assert "sk-abcdefghijklmnopqrstuvwxyz" not in snap.root["note"]
+        assert "[REDACTED]" in snap.root["note"]
+
+    def test_aws_key_in_value_redacted(self):
+        snap = self.tb.sanitize_context_snapshot({"log": "used AKIAIOSFODNN7EXAMPLE here"})
+        assert "AKIAIOSFODNN7EXAMPLE" not in snap.root["log"]
+
+    def test_bearer_token_in_nested_value_redacted(self):
+        snap = self.tb.sanitize_context_snapshot(
+            {"outer": {"header": "Bearer abcdefghijklmnopqrstuvwxyz0123456789"}}
+        )
+        assert "[REDACTED]" in snap.root["outer"]["header"]
+
+    def test_secret_in_list_value_redacted(self):
+        snap = self.tb.sanitize_context_snapshot(
+            {"items": ["clean", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"]}
+        )
+        assert snap.root["items"][0] == "clean"
+        assert "ghp_" not in snap.root["items"][1]
+
+    def test_benign_value_passes_through_unchanged(self):
+        snap = self.tb.sanitize_context_snapshot({"city": "London", "count": "three"})
+        assert snap.root["city"] == "London"
+        assert snap.root["count"] == "three"
+
 
 # ---------------------------------------------------------------------------
 # GuardRailPolicy tests

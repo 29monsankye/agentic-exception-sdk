@@ -1,7 +1,9 @@
 """Trust boundary validator — sanitizes all host-provided strings and snapshots.
 
 All host-provided strings and snapshots that enter an envelope are untrusted.
-They must be normalized and sanitized before the envelope is constructed.
+They must be normalized and sanitized before the envelope is constructed. This
+includes string *values* inside context snapshots: they are pattern-scanned with
+the same redaction rules as exception messages, not merely length-bounded.
 
 ReDoS protection: inputs are truncated before any regex is applied. All patterns
 are precompiled at class level with no nested quantifiers. A 10ms execution
@@ -196,18 +198,40 @@ class TrustBoundaryValidator:
             if unicodedata.category(ch) not in ("Cc", "Cf", "Cs")
         )
 
-        start = time.monotonic()
-        result = cleaned
+        redacted = self._apply_redaction_patterns(cleaned, time.monotonic())
+        if redacted is None:
+            return REDACTED_BUDGET
+
+        self._incr("sanitizer_redaction_total")
+        return redacted[:SAFE_MESSAGE_MAX_CHARS]
+
+    def _apply_redaction_patterns(self, text: str, start: float) -> str | None:
+        """Apply the precompiled redaction patterns under the shared ReDoS budget.
+
+        The caller passes ``start`` (a ``time.monotonic()`` reading) so a single
+        budget can span an entire operation — one exception message, or a whole
+        context-snapshot walk across many string values. The budget is checked
+        before each pattern; once REDACTION_BUDGET_MS is exceeded the scan stops
+        and the method fails closed.
+
+        Args:
+            text: The (already length-bounded) string to scan.
+            start: The monotonic clock reading the budget is measured from.
+
+        Returns:
+            The redacted string, or ``None`` if the budget was exceeded — in which
+            case the caller must substitute REDACTED_BUDGET (fail closed) rather
+            than return partially-scanned text.
+        """
+        result = text
         for pattern, replacement in _REDACTION_PATTERNS:
             elapsed_ms = (time.monotonic() - start) * 1000
             if elapsed_ms > REDACTION_BUDGET_MS:
                 self._incr("sanitizer_redaction_timeout_total")
-                return REDACTED_BUDGET
+                return None
             with suppress(Exception):
                 result = pattern.sub(replacement, result)
-
-        self._incr("sanitizer_redaction_total")
-        return result[:SAFE_MESSAGE_MAX_CHARS]
+        return result
 
     def safe_identifier(self, value: object) -> str:
         """Return a redacted, bounded string for span/log identifier attributes.
@@ -282,10 +306,17 @@ class TrustBoundaryValidator:
         - Caps dict nesting at SAFE_CONTEXT_MAX_DEPTH levels.
         - Caps keys per dict to SAFE_CONTEXT_MAX_KEYS.
         - Redacts values for sensitive keys (password, token, secret, etc.).
+        - Pattern-scans every string value (under any key) with the same
+          redaction patterns used for exception messages, so secrets embedded in
+          otherwise-benign fields (``{"note": "token is sk-..."}``) are redacted.
         - Replaces unsupported types (datetime, Decimal, UUID, bytes, custom classes)
           with ``"<ClassName>"`` strings and increments sanitizer_unsupported_type_total.
         - Replaces non-finite floats with ``"<non-finite-float>"``.
         - Never raises — sanitizer failures must not mask the original exception.
+
+        A single ReDoS budget (REDACTION_BUDGET_MS) spans the whole walk. If it is
+        exhausted, remaining string values fail closed to REDACTED_BUDGET rather
+        than passing through unscanned.
 
         Args:
             context_snapshot: Host-provided state mapping or None.
@@ -296,17 +327,21 @@ class TrustBoundaryValidator:
         if context_snapshot is None:
             return SafeContextSnapshot({})
         try:
-            sanitized = self._sanitize_node(context_snapshot, depth=0)
+            sanitized = self._sanitize_node(
+                context_snapshot, depth=0, start=time.monotonic()
+            )
             return SafeContextSnapshot(sanitized)
         except Exception:
             return SafeContextSnapshot({})
 
-    def _sanitize_node(self, node: Any, depth: int) -> Any:
+    def _sanitize_node(self, node: Any, depth: int, start: float) -> Any:
         """Recursively sanitize a context node.
 
         Args:
             node: Any value from the host context.
             depth: Current recursion depth.
+            start: Monotonic clock reading the shared redaction budget is measured
+                from; threaded unchanged through the whole snapshot walk.
 
         Returns:
             A JSON-safe sanitized value.
@@ -322,11 +357,11 @@ class TrustBoundaryValidator:
                 if _SENSITIVE_KEY_RE.match(key_str):
                     result[key_str] = REDACTED
                 else:
-                    result[key_str] = self._sanitize_node(v, depth + 1)
+                    result[key_str] = self._sanitize_node(v, depth + 1, start)
             return result
 
         if isinstance(node, list):
-            return [self._sanitize_node(item, depth + 1) for item in node]
+            return [self._sanitize_node(item, depth + 1, start) for item in node]
 
         if isinstance(node, bool):
             return node
@@ -340,7 +375,14 @@ class TrustBoundaryValidator:
             return node
 
         if isinstance(node, str):
-            return node[:SAFE_MESSAGE_MAX_CHARS]
+            # Truncate before any regex (ReDoS protection), then pattern-scan so
+            # secrets embedded under non-sensitive keys are redacted, not just
+            # length-bounded. Fail closed if the shared budget is exhausted.
+            truncated = node[:SAFE_MESSAGE_MAX_CHARS]
+            redacted = self._apply_redaction_patterns(truncated, start)
+            if redacted is None:
+                return REDACTED_BUDGET
+            return redacted[:SAFE_MESSAGE_MAX_CHARS]
 
         if node is None:
             return None

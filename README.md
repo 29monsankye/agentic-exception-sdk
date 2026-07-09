@@ -143,11 +143,13 @@ bundle = ResilienceBundle(
   propagation. Caps lineage at 64 hops; exceeding the cap auto-promotes to
   `HARD_KILL`.
 - **`TrustBoundaryValidator`** — runs pattern-based redaction (secrets, tokens,
-  PANs, bidi controls) over exception **messages**. For context snapshots it
-  redacts values under sensitively-named keys (`password`, `token`, `secret`,
-  …) and bounds size/depth. **Note:** snapshot values under non-sensitive keys
-  are length-bounded but **not** pattern-scanned — do not place raw secrets in
-  arbitrary snapshot fields. See **Limitations & Scope**.
+  PANs, bidi controls) over exception **messages** and over **string values in
+  context snapshots**. Snapshot handling redacts values under sensitively-named
+  keys (`password`, `token`, `secret`, …) outright, and pattern-scans every
+  other string value — including nested and list elements — so a secret embedded
+  in an otherwise-benign field (`{"note": "token is sk-…"}`) is still redacted,
+  not merely length-bounded. A single ReDoS budget spans the walk and fails
+  closed. Redaction remains best-effort — see **Limitations & Scope**.
 - **`ResilienceBundle.metrics_collector`** — optional `MetricsCollector`
   (protocol). `PrometheusMetricsCollector` emits `agent_exceptions_total`,
   `agent_hard_kills_total`, `agent_retries_total`, `agent_budget_exhausted_total`.
