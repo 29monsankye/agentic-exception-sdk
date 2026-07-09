@@ -1,0 +1,62 @@
+.DS_Store
+.env
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.egg
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+coverage/
+htmlcov/
+sbom*.json
+
+# macOS
+.DS_Store
+
+# Python
+*.py[cod]
+__pycache__/
+*.venv
+env/
+venv/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log
+package-lock.json
+yarn.lock
+
+# IDEs
+.vscode/
+.idea/
+
+# Local tooling outputs (not part of the SDK)
+.claude/
+benchmark-results.json
+mutmut-results.txt
+mutants/
+Python/
+
+# Cython build artifacts — generated during wheel build, never commit
+src/**/*.c
+src/**/*.so
+src/**/*.pyd
+
+# Internal docs — not for public distribution (keep only README public)
+internal/
+docs/
+plans/
+files/
+
+# pytest-benchmark baselines (machine-identifying — never commit)
+.benchmarks/
+*.baseline.json
+benchmarks/.baseline.json

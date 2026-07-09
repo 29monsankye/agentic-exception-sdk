@@ -1,0 +1,141 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "Cython>=3.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-exception-sdk"
+version = "1.1.0"
+description = "Domain-agnostic exception management SDK for agentic systems"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "jcs>=0.2.1",
+    "pydantic>=2.0.0",
+    "uuid-utils>=0.10.0",
+]
+
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-api>=1.29.0",
+    "opentelemetry-sdk>=1.29.0",
+]
+redis = ["redis>=5.0.0"]
+prometheus = ["prometheus-client>=0.20.0"]
+structlog = ["structlog>=24.0.0"]
+re2 = ["google-re2>=1.1"]
+all = [
+    "opentelemetry-api>=1.29.0",
+    "opentelemetry-sdk>=1.29.0",
+    "redis>=5.0.0",
+    "prometheus-client>=0.20.0",
+    "structlog>=24.0.0",
+    "google-re2>=1.1",
+]
+dev = [
+    "setuptools>=68",
+    "wheel",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=5.0.0",
+    "pytest-randomly>=3.15.0",
+    "pytest-timeout>=2.3.0",
+    "pytest-benchmark>=4.0.0",
+    "freezegun>=1.5.0",
+    "hypothesis>=6.100.0",
+    "mypy>=1.10.0",
+    "Cython>=3.0.0",
+    "ruff>=0.4.0",
+    "uv>=0.5.0",
+    "build>=1.2.0",
+    "bandit>=1.7.0",
+    "mutmut>=2.0",
+    "pip-audit>=2.7.0",
+    "types-redis",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "bench_*.py"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "stress: adversarial concurrency and async stress validation",
+    "fuzz: coverage-guided fuzz target wrappers",
+    "chaos: chaos and fault-injection validation scenarios",
+    "otel: OpenTelemetry semantic convention contract validation",
+    "mocked_contract: mocked framework/provider contract tests with no API keys",
+    "live: real provider/framework integration tests for release gates",
+]
+
+[tool.coverage.run]
+source = ["agentic_exception_sdk"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+no_implicit_reexport = true
+warn_unused_ignores = true
+warn_return_any = true
+show_error_codes = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["re2", "jcs"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "ANN", # flake8-annotations (subset)
+    "S",   # flake8-bandit
+    "RUF", # ruff-specific
+]
+ignore = [
+    "ANN401",  # Any is required for generic callable wrappers throughout the SDK
+    "RUF022",  # __all__ sorted: logical grouping by component takes priority
+    "S101",    # assert in tests is fine
+    "S311",    # random usage is documented in SDK
+    "TC001",   # runtime imports must stay at module level in SDK code
+    "TC003",   # same — stdlib runtime imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "B017", "RUF001", "S101", "S106", "S110", "SIM105"]
+"benchmarks/**" = ["ANN", "S101"]
+
+[tool.mutmut]
+paths_to_mutate = ["src/agentic_exception_sdk/"]
+tests_dir = ["tests"]
+pytest_add_cli_args = ["--override-ini=addopts="]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]  # assert_used — SDK uses assertions in tests only

@@ -1,0 +1,9 @@
+from agentic_exception_sdk.taxonomy.envelope import AgentExceptionEnvelope
+from typing import Any
+
+__all__ = ['OTelExceptionAdapter']
+
+class OTelExceptionAdapter:
+    def __init__(self, tracer_provider: Any, *, span_processor: Any | None = None) -> None: ...
+    def emit(self, envelope: AgentExceptionEnvelope) -> None: ...
+    def force_flush(self) -> None: ...
