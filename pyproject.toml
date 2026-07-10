@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel", "Cython>=3.0.0"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -46,7 +46,6 @@ dev = [
     "freezegun>=1.5.0",
     "hypothesis>=6.100.0",
     "mypy>=1.10.0",
-    "Cython>=3.0.0",
     "ruff>=0.4.0",
     "uv>=0.5.0",
     "build>=1.2.0",
@@ -55,6 +54,17 @@ dev = [
     "pip-audit>=2.7.0",
     "types-redis",
 ]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship type stubs and the typing marker alongside the pure-Python source.
+[tool.setuptools.package-data]
+"*" = ["*.pyi"]
+agentic_exception_sdk = ["py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
