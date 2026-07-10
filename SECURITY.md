@@ -45,29 +45,29 @@ your report — a redacted or synthetic reproduction is preferred.
 
 ## Our commitment
 
-This is an open-source project maintained on a best-effort basis. We aim to:
+This is an open-source project maintained on a best-effort basis. When you send
+a report, we will make a good-faith effort to:
 
-- **Acknowledge** your report within **5 business days**.
-- **Provide an initial assessment** (accepted / needs-more-info / not-a-vuln)
-  within **10 business days**.
+- **Acknowledge** that we received it.
+- **Assess** it (accepted / needs-more-info / not-a-vuln) and let you know.
 - **Keep you informed** of remediation progress for accepted reports.
 - **Credit** you in the release notes and/or the published advisory when a fix
   ships, unless you ask to remain anonymous.
 
-These are targets, not contractual guarantees. Response times may vary with
-maintainer availability and report complexity.
+We do not commit to specific response or resolution timelines. Turnaround
+depends on maintainer availability, severity, and report complexity.
 
 ## Coordinated disclosure
 
 We follow a coordinated-disclosure model:
 
-- We ask that you give us a reasonable opportunity to release a fix before any
-  public disclosure. **90 days** from your initial report is a good default, and
-  we will work with you to adjust it for severity and complexity.
+- We ask that you give us a reasonable opportunity to investigate and release a
+  fix before any public disclosure, and we will work with you in good faith on
+  disclosure timing based on severity and complexity.
 - Once a fix is released, we will publish a security advisory (GitHub Security
   Advisory / GHSA) describing the issue and crediting the reporter.
 - If a reported issue is already public, or is being actively exploited, we may
-  accelerate the timeline.
+  act more quickly.
 
 ## Scope
 
