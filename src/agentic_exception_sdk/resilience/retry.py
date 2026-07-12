@@ -329,42 +329,46 @@ class ExponentialBackoffRetry:
             Exception: Re-raises the last exception when max_attempts is exhausted.
         """
         last_exc: BaseException | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            ctx = RetryContext(
-                correlation_id=context.correlation_id if context else None,
-                agent_id=context.agent_id if context else None,
-                tool_name=context.tool_name if context else None,
-                idempotency_key=context.idempotency_key if context else None,
-                on_retry=context.on_retry if context else None,
-                attempt=attempt,
-            )
-            if self.idempotency_key_fn is not None and attempt > 1:
-                self.idempotency_key_fn(ctx)
+        # Resolved once so the finally clears the same in-flight key that
+        # _record_attempt writes — even when fn() raises a *non-retryable*
+        # exception (e.g. BudgetExhaustedError) that exits the loop early.
+        correlation_key = (context.correlation_id if context else None) or ""
+        try:
+            for attempt in range(1, self.max_attempts + 1):
+                ctx = RetryContext(
+                    correlation_id=context.correlation_id if context else None,
+                    agent_id=context.agent_id if context else None,
+                    tool_name=context.tool_name if context else None,
+                    idempotency_key=context.idempotency_key if context else None,
+                    on_retry=context.on_retry if context else None,
+                    attempt=attempt,
+                )
+                if self.idempotency_key_fn is not None and attempt > 1:
+                    self.idempotency_key_fn(ctx)
 
-            try:
-                result = fn()
-                self._complete(ctx)
-                return result
-            except self.retryable_exceptions as exc:
-                last_exc = exc
-                if attempt < self.max_attempts:
-                    delay = self._compute_delay(attempt, exc)
-                    self._check_budget(delay)
-                    self._record_attempt(ctx, exc, delay)
-                    if ctx.on_retry is not None:
-                        ctx.on_retry()
-                    _log.debug(
-                        "retry attempt %s/%s tool=%s delay=%.3fs",
-                        attempt,
-                        self.max_attempts,
-                        ctx.tool_name,
-                        delay,
-                    )
-                    time.sleep(delay)
-        if last_exc is None:  # pragma: no cover - max_attempts validation prevents this path
-            raise RuntimeError("retry policy exhausted without capturing an exception")
-        self._complete(context)
-        raise last_exc
+                try:
+                    return fn()
+                except self.retryable_exceptions as exc:
+                    last_exc = exc
+                    if attempt < self.max_attempts:
+                        delay = self._compute_delay(attempt, exc)
+                        self._check_budget(delay)
+                        self._record_attempt(ctx, exc, delay)
+                        if ctx.on_retry is not None:
+                            ctx.on_retry()
+                        _log.debug(
+                            "retry attempt %s/%s tool=%s delay=%.3fs",
+                            attempt,
+                            self.max_attempts,
+                            ctx.tool_name,
+                            delay,
+                        )
+                        time.sleep(delay)
+            if last_exc is None:  # pragma: no cover - max_attempts validation prevents this path
+                raise RuntimeError("retry policy exhausted without capturing an exception")
+            raise last_exc
+        finally:
+            self._complete(correlation_key)
 
     async def async_execute(
         self,
@@ -385,42 +389,43 @@ class ExponentialBackoffRetry:
             Exception: Re-raises the last exception when max_attempts is exhausted.
         """
         last_exc: BaseException | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            ctx = RetryContext(
-                correlation_id=context.correlation_id if context else None,
-                agent_id=context.agent_id if context else None,
-                tool_name=context.tool_name if context else None,
-                idempotency_key=context.idempotency_key if context else None,
-                on_retry=context.on_retry if context else None,
-                attempt=attempt,
-            )
-            if self.idempotency_key_fn is not None and attempt > 1:
-                self.idempotency_key_fn(ctx)
+        correlation_key = (context.correlation_id if context else None) or ""
+        try:
+            for attempt in range(1, self.max_attempts + 1):
+                ctx = RetryContext(
+                    correlation_id=context.correlation_id if context else None,
+                    agent_id=context.agent_id if context else None,
+                    tool_name=context.tool_name if context else None,
+                    idempotency_key=context.idempotency_key if context else None,
+                    on_retry=context.on_retry if context else None,
+                    attempt=attempt,
+                )
+                if self.idempotency_key_fn is not None and attempt > 1:
+                    self.idempotency_key_fn(ctx)
 
-            try:
-                result = await fn()
-                self._complete(ctx)
-                return result
-            except self.retryable_exceptions as exc:
-                last_exc = exc
-                if attempt < self.max_attempts:
-                    delay = self._compute_delay(attempt, exc)
-                    self._check_budget(delay)
-                    self._record_attempt(ctx, exc, delay)
-                    if ctx.on_retry is not None:
-                        ctx.on_retry()
-                    _log.debug(
-                        "async retry attempt %s/%s tool=%s delay=%.3fs",
-                        attempt,
-                        self.max_attempts,
-                        ctx.tool_name,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-        if last_exc is None:  # pragma: no cover - max_attempts validation prevents this path
-            raise RuntimeError("async retry policy exhausted without capturing an exception")
-        self._complete(context)
-        raise last_exc
+                try:
+                    return await fn()
+                except self.retryable_exceptions as exc:
+                    last_exc = exc
+                    if attempt < self.max_attempts:
+                        delay = self._compute_delay(attempt, exc)
+                        self._check_budget(delay)
+                        self._record_attempt(ctx, exc, delay)
+                        if ctx.on_retry is not None:
+                            ctx.on_retry()
+                        _log.debug(
+                            "async retry attempt %s/%s tool=%s delay=%.3fs",
+                            attempt,
+                            self.max_attempts,
+                            ctx.tool_name,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+            if last_exc is None:  # pragma: no cover - max_attempts validation prevents this path
+                raise RuntimeError("async retry policy exhausted without capturing an exception")
+            raise last_exc
+        finally:
+            self._complete(correlation_key)
 
     def _record_attempt(
         self,
@@ -444,7 +449,7 @@ class ExponentialBackoffRetry:
             )
         )
 
-    def _complete(self, context: RetryContext | None) -> None:
-        if self.inflight_tracker is None or context is None:
+    def _complete(self, correlation_id: str | None) -> None:
+        if self.inflight_tracker is None:
             return
-        self.inflight_tracker.complete(context.correlation_id or "")
+        self.inflight_tracker.complete(correlation_id or "")

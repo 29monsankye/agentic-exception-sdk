@@ -12,7 +12,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_exception_sdk.bundle import ResilienceBundle
-from agentic_exception_sdk.resilience.wrap import async_resilient, resilient
+from agentic_exception_sdk.resilience.wrap import _drain_coroutine, async_resilient, resilient
 from agentic_exception_sdk.taxonomy.enums import AgentExceptionClass
 from agentic_exception_sdk.taxonomy.envelope import AgentExceptionEnvelope
 from agentic_exception_sdk.taxonomy.errors import AgentHardKillError
@@ -68,7 +68,9 @@ class _EnvelopeCaptureBus:
         publish = getattr(self._delegate, "publish", None)
         if callable(publish):
             try:
-                publish(envelope)
+                result = publish(envelope)
+                if inspect.iscoroutine(result):
+                    _drain_coroutine(result)
             except Exception:
                 return
 
@@ -108,14 +110,19 @@ async def call_parallel(
         call_bundle = replace(bundle, propagation_bus=capture_bus)
 
         def _wrapped_call() -> Any:
+            # Enforce the sync timeout *inside* resilient() so a timeout is
+            # classified, recorded against the circuit breaker/budget, and
+            # published as an envelope — instead of being swallowed by an outer
+            # asyncio.timeout() that cancels the awaiting task and drops all
+            # telemetry (and any subsequent HARD_KILL) on the floor.
             return resilient(
                 call_bundle,
                 tool_name=tool_name,
                 agent_id=agent_id,
                 correlation_id=correlation_id,
                 fallback_value=_FAILED_CALL,
-                timeout_seconds=None,
-                allow_sync_llm_timeout=False,
+                timeout_seconds=timeout_seconds,
+                allow_sync_llm_timeout=timeout_seconds is not None,
             )(fn)()
 
         try:
@@ -129,11 +136,7 @@ async def call_parallel(
                     timeout_seconds=timeout_seconds,
                 )(fn)()
             else:
-                if timeout_seconds is not None:
-                    async with asyncio.timeout(timeout_seconds):
-                        value = await asyncio.to_thread(_wrapped_call)
-                else:
-                    value = await asyncio.to_thread(_wrapped_call)
+                value = await asyncio.to_thread(_wrapped_call)
         except AgentHardKillError:
             raise
         except Exception:
