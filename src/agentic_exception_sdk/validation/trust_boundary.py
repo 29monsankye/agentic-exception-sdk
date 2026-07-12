@@ -103,9 +103,12 @@ _REDACTION_PATTERNS: list[tuple[Any, str]] = [
     (_re_engine.compile(
         r"\b(?:\d[ \-]?){13,19}\b"
     ), REDACTED),
-    # Unicode bidi override / zero-width characters
+    # Unicode bidi override / zero-width characters.
+    # Literal code points via non-raw \u escapes (Python decodes them at parse time).
+    # google-re2 rejects raw \uXXXX escapes ("invalid escape sequence: \u"), which
+    # crashed at import under the [re2] extra; literal chars compile under both engines.
     (_re_engine.compile(
-        r"[​-\u200F\u202A-\u202E⁠-\u2069﻿]"
+        "[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]"
     ), REDACTED),
 ]
 

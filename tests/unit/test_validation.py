@@ -33,6 +33,35 @@ def test_redaction_engine_module_name() -> None:
 
     assert tb._re_engine.__name__ in ("re2", "re")
 
+
+def test_no_redaction_pattern_uses_re2_incompatible_u_escape() -> None:
+    """Guard against the [re2] import crash regression (runs without re2 installed).
+
+    google-re2 rejects raw ``\\uXXXX`` escapes ("invalid escape sequence: \\u"),
+    which crashed the SDK at import under the recommended ``[re2]`` extra. Patterns
+    must use literal code points (or ``\\x{...}``), never a ``\\u`` escape. The
+    compiled pattern's source (``.pattern``) must therefore contain no ``\\u``.
+    """
+    from agentic_exception_sdk.validation.trust_boundary import _REDACTION_PATTERNS
+
+    for pat, _ in _REDACTION_PATTERNS:
+        assert "\\u" not in pat.pattern, (
+            f"redaction pattern uses a \\u escape (rejected by google-re2): {pat.pattern!r}"
+        )
+
+
+def test_all_redaction_patterns_compile_under_re2() -> None:
+    """When google-re2 is installed, every redaction pattern must compile under it.
+
+    Exercises the recommended ``[re2]`` path that previously went untested. Skips
+    cleanly when re2 is not available; a CI cell with ``[re2]`` should run it.
+    """
+    re2 = pytest.importorskip("re2")
+    from agentic_exception_sdk.validation.trust_boundary import _REDACTION_PATTERNS
+
+    for pat, _ in _REDACTION_PATTERNS:
+        re2.compile(pat.pattern)  # must not raise
+
 class TestCanonicalizeToolName:
     def setup_method(self):
         self.tb = TrustBoundaryValidator()
