@@ -35,8 +35,7 @@ class ConsensusGate:
 
     Args:
         threshold: Number of agent votes required to reach consensus.
-        correlation_id: End-to-end trace identifier for this consensus window.
-            Used only for diagnostic messages — not for keying internal state.
+        correlation_id: Default end-to-end trace identifier for votes and reads.
     """
 
     def __init__(
@@ -49,7 +48,7 @@ class ConsensusGate:
             raise ValueError(f"threshold must be >= 1, got {threshold}")
         self._threshold = threshold
         self._correlation_id = correlation_id
-        self._votes: int = 0
+        self._votes: dict[str, int] = {}
         self._lock = threading.RLock()
 
     def vote(self, envelope: AgentExceptionEnvelope | None = None) -> None:
@@ -59,40 +58,45 @@ class ConsensusGate:
             envelope: Optional envelope associated with this vote. Ignored by
                       the gate itself but available for subclasses or logging.
         """
+        correlation_id = (
+            (envelope.correlation_id if envelope is not None else None)
+            or self._correlation_id
+            or "global"
+        )
         with self._lock:
-            self._votes += 1
+            self._votes[correlation_id] = self._votes.get(correlation_id, 0) + 1
 
-    def reached(self) -> bool:
+    def reached(self, correlation_id: str | None = None) -> bool:
         """Return True if the consensus threshold has been met.
 
         Returns:
             True if vote count >= threshold.
         """
+        key = correlation_id or self._correlation_id or "global"
         with self._lock:
-            return self._votes >= self._threshold
+            return self._votes.get(key, 0) >= self._threshold
 
-    def require_consensus(self) -> None:
+    def require_consensus(self, correlation_id: str | None = None) -> None:
         """Assert that the consensus threshold has been met.
 
         Raises:
             ConsensusNotReachedError: If vote count < threshold.
         """
+        key = correlation_id or self._correlation_id or "global"
         with self._lock:
-            if self._votes < self._threshold:
-                detail = (
-                    f" correlation_id={self._correlation_id}"
-                    if self._correlation_id
-                    else ""
-                )
+            votes = self._votes.get(key, 0)
+            if votes < self._threshold:
                 raise ConsensusNotReachedError(
-                    f"consensus not reached: {self._votes}/{self._threshold} votes{detail}"
+                    f"consensus not reached: {votes}/{self._threshold} votes "
+                    f"for correlation_id={key}"
                 )
 
     @property
     def vote_count(self) -> int:
         """Current vote count (thread-safe snapshot)."""
+        key = self._correlation_id or "global"
         with self._lock:
-            return self._votes
+            return self._votes.get(key, 0)
 
     @property
     def threshold(self) -> int:

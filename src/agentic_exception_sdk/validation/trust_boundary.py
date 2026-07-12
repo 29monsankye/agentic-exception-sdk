@@ -54,62 +54,56 @@ RE2_AVAILABLE: bool = _RE2_AVAILABLE
 
 # Sensitive context key patterns for snapshot redaction
 _SENSITIVE_KEY_RE: re.Pattern[str] = re.compile(
-    r"(?i)^(password|passwd|token|secret|key|credential|auth|api_?key)$"
+    r"(?i).*(password|passwd|token|secret|key|credential|auth|api_?key).*"
 )
 
 # Precompiled ReDoS-resistant redaction patterns.
 # All patterns avoid nested quantifiers and ambiguous .* constructs.
 _REDACTION_PATTERNS: list[tuple[Any, str]] = [
     # password/token/secret/credential assignments (key=value style)
-    (_re_engine.compile(
-        r"(?i)(password|passwd|secret|token|credential|api.?key|apikey|auth)[\"'\s]*[=:][\"'\s]*\S{1,200}"
-    ), REDACTED),
+    (
+        _re_engine.compile(
+            r"(?i)(password|passwd|secret|token|credential|api.?key|apikey|auth)[\"'\s]*[=:][\"'\s]*\S{1,200}"
+        ),
+        REDACTED,
+    ),
     # URL query secrets: ?key=val or &key=val
-    (_re_engine.compile(
-        r"(?i)[?&](api.?key|token|secret|key|password|auth|credential)[=][^\s&]{1,200}"
-    ), REDACTED),
+    (
+        _re_engine.compile(
+            r"(?i)[?&](api.?key|token|secret|key|password|auth|credential)[=][^\s&]{1,200}"
+        ),
+        REDACTED,
+    ),
     # Email addresses
-    (_re_engine.compile(
-        r"\b[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,63}\b"
-    ), REDACTED),
+    (
+        _re_engine.compile(r"\b[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,63}\b"),
+        REDACTED,
+    ),
     # Bearer tokens
-    (_re_engine.compile(
-        r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]{10,500}=*"
-    ), REDACTED),
+    (_re_engine.compile(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]{10,500}=*"), REDACTED),
     # AWS access keys: AKIA followed by 16 uppercase alphanumeric
-    (_re_engine.compile(
-        r"AKIA[0-9A-Z]{16}"
-    ), REDACTED),
+    (_re_engine.compile(r"AKIA[0-9A-Z]{16}"), REDACTED),
     # GitHub PATs
-    (_re_engine.compile(
-        r"(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{20,255}"
-    ), REDACTED),
-    (_re_engine.compile(
-        r"github_pat_[a-zA-Z0-9_]{20,255}"
-    ), REDACTED),
+    (_re_engine.compile(r"(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{20,255}"), REDACTED),
+    (_re_engine.compile(r"github_pat_[a-zA-Z0-9_]{20,255}"), REDACTED),
     # OpenAI key
-    (_re_engine.compile(
-        r"sk-[a-zA-Z0-9]{20,255}"
-    ), REDACTED),
+    (_re_engine.compile(r"sk-[a-zA-Z0-9]{20,255}"), REDACTED),
     # Anthropic key
-    (_re_engine.compile(
-        r"sk-ant-[a-zA-Z0-9\-]{20,255}"
-    ), REDACTED),
+    (_re_engine.compile(r"sk-ant-[a-zA-Z0-9\-]{20,255}"), REDACTED),
     # JWTs: base64url.base64url.base64url
-    (_re_engine.compile(
-        r"eyJ[a-zA-Z0-9_\-]{10,500}\.eyJ[a-zA-Z0-9_\-]{10,500}\.[a-zA-Z0-9_\-]{10,500}"
-    ), REDACTED),
+    (
+        _re_engine.compile(
+            r"eyJ[a-zA-Z0-9_\-]{10,500}\.eyJ[a-zA-Z0-9_\-]{10,500}\.[a-zA-Z0-9_\-]{10,500}"
+        ),
+        REDACTED,
+    ),
     # Credit card PANs: 13-19 digit sequences with optional separators
-    (_re_engine.compile(
-        r"\b(?:\d[ \-]?){13,19}\b"
-    ), REDACTED),
+    (_re_engine.compile(r"\b(?:\d[ \-]?){13,19}\b"), REDACTED),
     # Unicode bidi override / zero-width characters.
     # Literal code points via non-raw \u escapes (Python decodes them at parse time).
     # google-re2 rejects raw \uXXXX escapes ("invalid escape sequence: \u"), which
     # crashed at import under the [re2] extra; literal chars compile under both engines.
-    (_re_engine.compile(
-        "[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]"
-    ), REDACTED),
+    (_re_engine.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]"), REDACTED),
 ]
 
 __all__ = ["RE2_AVAILABLE", "TrustBoundaryValidator"]
@@ -196,10 +190,7 @@ class TrustBoundaryValidator:
             return REDACTED
 
         # Strip control/format/surrogate Unicode categories
-        cleaned = "".join(
-            ch for ch in raw
-            if unicodedata.category(ch) not in ("Cc", "Cf", "Cs")
-        )
+        cleaned = "".join(ch for ch in raw if unicodedata.category(ch) not in ("Cc", "Cf", "Cs"))
 
         redacted = self._apply_redaction_patterns(cleaned, time.monotonic())
         if redacted is None:
@@ -330,9 +321,7 @@ class TrustBoundaryValidator:
         if context_snapshot is None:
             return SafeContextSnapshot({})
         try:
-            sanitized = self._sanitize_node(
-                context_snapshot, depth=0, start=time.monotonic()
-            )
+            sanitized = self._sanitize_node(context_snapshot, depth=0, start=time.monotonic())
             return SafeContextSnapshot(sanitized)
         except Exception:
             return SafeContextSnapshot({})

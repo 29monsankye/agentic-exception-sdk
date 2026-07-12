@@ -100,6 +100,10 @@ class NoOpCircuitBreaker:
         """
         return fn()
 
+    async def async_call(self, fn: Callable[[], Awaitable[T]]) -> T:
+        """Execute an async function without circuit-breaker logic."""
+        return await fn()
+
 
 class NoOpAsyncCircuitBreaker:
     """Async circuit breaker that always passes calls through (no-op)."""
@@ -183,9 +187,7 @@ class InMemoryCircuitBreaker:
                     self._probe_in_flight_count = 0
                     self._transition_to(CircuitState.HALF_OPEN)
                 else:
-                    raise CircuitBreakerStateUnavailableError(
-                        "circuit breaker is OPEN"
-                    )
+                    raise CircuitBreakerStateUnavailableError("circuit breaker is OPEN")
             if self._state == CircuitState.HALF_OPEN:
                 if self._probe_in_flight_count >= self._half_open_probe_count:
                     raise CircuitBreakerStateUnavailableError(
@@ -235,6 +237,62 @@ class InMemoryCircuitBreaker:
                 # Successful call in CLOSED state resets failure counter
                 self._failure_count = 0
 
+        return result
+
+    async def async_call(self, fn: Callable[[], Awaitable[T]]) -> T:
+        """Execute an async function through the thread-safe state machine."""
+        with self._lock:
+            if self._state == CircuitState.OPEN:
+                if (
+                    self._opened_at is not None
+                    and time.monotonic() - self._opened_at >= self._cooldown_seconds
+                ):
+                    self._probe_success_count = 0
+                    self._probe_in_flight_count = 0
+                    self._transition_to(CircuitState.HALF_OPEN)
+                else:
+                    raise CircuitBreakerStateUnavailableError("circuit breaker is OPEN")
+            if self._state == CircuitState.HALF_OPEN:
+                if self._probe_in_flight_count >= self._half_open_probe_count:
+                    raise CircuitBreakerStateUnavailableError(
+                        "circuit breaker is HALF_OPEN and probe budget is exhausted"
+                    )
+                self._probe_in_flight_count += 1
+                admitted_probe = True
+            else:
+                admitted_probe = False
+
+        try:
+            result = await fn()
+        except Exception:
+            with self._lock:
+                if self._state == CircuitState.HALF_OPEN:
+                    self._transition_to(CircuitState.OPEN)
+                    self._opened_at = time.monotonic()
+                    self._failure_count = 0
+                    self._probe_success_count = 0
+                if admitted_probe:
+                    self._probe_in_flight_count = max(0, self._probe_in_flight_count - 1)
+                else:
+                    self._failure_count += 1
+                    if self._failure_count >= self._failure_threshold:
+                        self._transition_to(CircuitState.OPEN)
+                        self._opened_at = time.monotonic()
+                        self._failure_count = 0
+            raise
+
+        with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                if admitted_probe:
+                    self._probe_in_flight_count = max(0, self._probe_in_flight_count - 1)
+                self._probe_success_count += 1
+                if self._probe_success_count >= self._half_open_probe_count:
+                    self._failure_count = 0
+                    self._probe_success_count = 0
+                    self._probe_in_flight_count = 0
+                    self._transition_to(CircuitState.CLOSED)
+            else:
+                self._failure_count = 0
         return result
 
 
@@ -309,9 +367,7 @@ class AsyncInMemoryCircuitBreaker:
                     self._probe_in_flight_count = 0
                     self._transition_to(CircuitState.HALF_OPEN)
                 else:
-                    raise CircuitBreakerStateUnavailableError(
-                        "async circuit breaker is OPEN"
-                    )
+                    raise CircuitBreakerStateUnavailableError("async circuit breaker is OPEN")
             if self._state == CircuitState.HALF_OPEN:
                 if self._probe_in_flight_count >= self._half_open_probe_count:
                     raise CircuitBreakerStateUnavailableError(
@@ -422,8 +478,7 @@ class RedisCircuitBreaker:
         self._lock = threading.RLock()
         self.state_transition_total = 0
         self._key = (
-            f"agentic-exception-sdk:{sdk_version}:{environment}:"
-            f"circuit-breaker:{circuit_name}"
+            f"agentic-exception-sdk:{sdk_version}:{environment}:circuit-breaker:{circuit_name}"
         )
 
         if redis_client is not None:
@@ -565,11 +620,11 @@ class RedisCircuitBreaker:
 
     async def async_call(self, fn: Callable[[], Awaitable[T]]) -> T:
         """Execute async fn through Redis-backed circuit state."""
-        self._before_call()
+        await asyncio.to_thread(self._before_call)
         try:
             result = await fn()
         except Exception:
-            self._record_failure()
+            await asyncio.to_thread(self._record_failure)
             raise
-        self._record_success()
+        await asyncio.to_thread(self._record_success)
         return result

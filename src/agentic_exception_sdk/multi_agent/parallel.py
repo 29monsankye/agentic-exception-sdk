@@ -84,11 +84,8 @@ async def call_parallel(
     Args:
         calls: Tuples of (bundle, tool_name, agent_id, fn).
         correlation_id: Optional trace identifier passed to each wrapped call.
-        timeout_seconds: Optional per-call timeout passed through to resilient().
-            For synchronous callables, this uses resilient(...,
-            allow_sync_llm_timeout=True) internally so parallel orchestration can
-            bound wall time. That has the same leaked-worker caveat documented
-            on resilient(): the worker thread cannot be forcibly cancelled.
+        timeout_seconds: Optional per-call timeout. Synchronous calls are run in
+            one worker thread and bounded at the async task level.
 
     Returns:
         A tuple of (results, outcome envelope). The results list preserves input
@@ -117,8 +114,8 @@ async def call_parallel(
                 agent_id=agent_id,
                 correlation_id=correlation_id,
                 fallback_value=_FAILED_CALL,
-                timeout_seconds=timeout_seconds,
-                allow_sync_llm_timeout=timeout_seconds is not None,
+                timeout_seconds=None,
+                allow_sync_llm_timeout=False,
             )(fn)()
 
         try:
@@ -132,7 +129,11 @@ async def call_parallel(
                     timeout_seconds=timeout_seconds,
                 )(fn)()
             else:
-                value = await asyncio.to_thread(_wrapped_call)
+                if timeout_seconds is not None:
+                    async with asyncio.timeout(timeout_seconds):
+                        value = await asyncio.to_thread(_wrapped_call)
+                else:
+                    value = await asyncio.to_thread(_wrapped_call)
         except AgentHardKillError:
             raise
         except Exception:
@@ -183,9 +184,7 @@ async def call_parallel(
 
 def _aggregate_class(outcomes: list[AgentOutcome]) -> AgentExceptionClass | None:
     classes = [
-        outcome.envelope.exception_class
-        for outcome in outcomes
-        if outcome.envelope is not None
+        outcome.envelope.exception_class for outcome in outcomes if outcome.envelope is not None
     ]
     if not classes:
         return None

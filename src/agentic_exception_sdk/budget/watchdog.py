@@ -10,7 +10,6 @@ Budget consumption semantics (fixed):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
 import time
@@ -26,8 +25,8 @@ __all__ = ["BudgetWatchdog"]
 class BudgetWatchdog:
     """Tracks and enforces agent resource budgets with concurrency-safe atomic reservations.
 
-    Sync paths use threading.RLock. Async paths use asyncio.Lock, lazily
-    initialized per event loop to avoid lifecycle issues.
+    Sync and async paths share a threading.RLock so mixed-concurrency callers
+    cannot race with each other.
 
     All check-and-reserve operations are atomic within their respective lock so
     that concurrent async_resilient() executions cannot overspend the budget
@@ -46,17 +45,6 @@ class BudgetWatchdog:
         self._output_tokens_used: int = 0
         self._cost_micros_used: int = 0
         self._lock = threading.RLock()
-        self._async_lock: asyncio.Lock | None = None
-
-    def _get_async_lock(self) -> asyncio.Lock:
-        """Lazily create asyncio.Lock on first use.
-
-        Returns:
-            The asyncio.Lock for this watchdog.
-        """
-        if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
-        return self._async_lock
 
     def consume_call(self) -> None:
         """Record one tool call invocation and check max_tool_calls ceiling.
@@ -196,7 +184,7 @@ class BudgetWatchdog:
         output_tokens: int = 0,
         cost_micros_usd: int = 0,
     ) -> None:
-        """Async-safe version of reserve_tokens using asyncio.Lock.
+        """Async-safe version of reserve_tokens using the shared thread lock.
 
         Check-and-reserve is one asyncio.Lock-protected operation.
 
@@ -208,7 +196,7 @@ class BudgetWatchdog:
         Raises:
             BudgetExhaustedError: If any ceiling would be exceeded.
         """
-        async with self._get_async_lock():
+        with self._lock:
             self._check_token_ceilings(input_tokens, output_tokens, cost_micros_usd)
             self._input_tokens_used += input_tokens
             self._output_tokens_used += output_tokens

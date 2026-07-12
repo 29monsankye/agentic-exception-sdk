@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -59,15 +60,13 @@ SAFE_IDENTIFIER_RE: re.Pattern[str] = re.compile(r"^[a-z0-9_-]{1,128}$")
 # Re-entrancy guard: set to True while inside a side-effect call (sink/bus/router).
 # Prevents recursive emission when a sink itself raises an SDK BaseException.
 # Declared with default=False so .get() never raises LookupError.
-_in_exception_side_effect: ContextVar[bool] = ContextVar(
-    "in_exception_side_effect", default=False
-)
+_in_exception_side_effect: ContextVar[bool] = ContextVar("in_exception_side_effect", default=False)
 
 # Thread-pool for bounded sync timeout execution (one per interpreter process).
 # Not per-bundle — keeping a global bounded pool avoids resource leaks when
 # ResilienceBundle instances are created and discarded frequently.
 _SYNC_TIMEOUT_EXECUTOR: ThreadPoolExecutor = ThreadPoolExecutor(
-    max_workers=16,
+    max_workers=int(os.environ.get("SDK_SYNC_TIMEOUT_WORKERS", "128")),
     thread_name_prefix="sdk-resilient-timeout",
 )
 
@@ -220,6 +219,39 @@ def _safe_publish_dlq(dlq: object, envelope: AgentExceptionEnvelope) -> None:
         return
     try:
         publish(envelope)
+    except Exception:
+        _log.debug("DLQ publish failed; ignoring")
+
+
+async def _safe_publish_async(bus: object, envelope: AgentExceptionEnvelope) -> None:
+    """Await async-native propagation buses without leaking coroutines."""
+    if _in_exception_side_effect.get():
+        return
+    token = _in_exception_side_effect.set(True)
+    try:
+        publish = getattr(bus, "publish", None)
+        if callable(publish):
+            result = publish(envelope)
+            if inspect.iscoroutine(result):
+                await result
+    except Exception:
+        _log.debug("propagation_bus.publish failed; ignoring")
+    finally:
+        _in_exception_side_effect.reset(token)
+
+
+async def _safe_publish_dlq_async(
+    dlq: object,
+    envelope: AgentExceptionEnvelope,
+) -> None:
+    """Await async-native DLQs without masking terminal action."""
+    publish = getattr(dlq, "publish", None)
+    if not callable(publish):
+        return
+    try:
+        result = publish(envelope)
+        if inspect.iscoroutine(result):
+            await result
     except Exception:
         _log.debug("DLQ publish failed; ignoring")
 
@@ -428,20 +460,20 @@ def _execute_resilient_sync(
 
         # 2. Budget (inside try so exhaustion produces AgentHardKillError envelopes)
         bundle.agent_budget.consume_call()
-        # 5. Execute via circuit breaker -> retry policy -> fn
-        if config.timeout_seconds is not None and config.allow_sync_llm_timeout:
-            def _run_with_timeout() -> T:
-                future: Future[T] = _SYNC_TIMEOUT_EXECUTOR.submit(fn, *args, **kwargs)
-                try:
-                    return future.result(timeout=config.timeout_seconds)
-                except Exception:
-                    raise
 
-            def _call_fn() -> T:
-                return _run_with_timeout()
-        else:
-            def _call_fn() -> T:
+        # 5. Execute via circuit breaker -> retry policy -> fn
+        def _run_with_timeout() -> T:
+            future: Future[T] = _SYNC_TIMEOUT_EXECUTOR.submit(fn, *args, **kwargs)
+            return future.result(timeout=config.timeout_seconds)
+
+        def _call_fn() -> T:
+            try:
+                if config.timeout_seconds is not None and config.allow_sync_llm_timeout:
+                    return _run_with_timeout()
                 return fn(*args, **kwargs)
+            except Exception:
+                bundle.agent_budget.record_failure()
+                raise
 
         def _retry_fn() -> T:
             context = RetryContext(
@@ -488,7 +520,7 @@ def _execute_resilient_sync(
             _safe_emit(bundle.exception_sink, envelope)
             _safe_publish(bundle.propagation_bus, envelope)
             exc_class = envelope.exception_class
-            _handle_tier(exc_class, envelope, config, bundle)
+            return cast("T", _handle_tier(exc_class, envelope, config, bundle))
 
         if control is not None:
             raise control from None
@@ -559,6 +591,16 @@ def _handle_tier(
         policy_result = _apply_recovery_policy(bundle, envelope)
         if policy_result is not MISSING:
             return policy_result
+        directive = _safe_route(bundle.escalation_router, envelope)
+        if directive is not None:
+            if directive.action == "resume":
+                return directive.resume_state
+            if directive.action == "abort":
+                hk_envelope = _promote_to_hard_kill(envelope)
+                _safe_publish_dlq(bundle.dlq, hk_envelope)
+                _safe_record_hard_kill(bundle.metrics_collector, config.agent_id)
+                force_flush_exception_telemetry(bundle.exception_sink)
+                raise AgentHardKillError(hk_envelope)
         if config.fallback_value is not MISSING:
             return config.fallback_value
         raise  # re-raise original
@@ -569,18 +611,10 @@ def _handle_tier(
             return policy_result
         directive = _safe_route(bundle.escalation_router, envelope)
         if directive is not None:
-            if directive.action == "resume" and directive.resume_state is not None:
+            if directive.action == "resume":
                 return directive.resume_state
             if directive.action == "abort":
-                # Promote ISSUE envelope to a fresh HARD_KILL envelope
-                hk_envelope = AgentExceptionEnvelope(
-                    **{
-                        k: v for k, v in envelope.model_dump().items()
-                        if k not in {"exception_class", "suggested_recovery", "sdk_version"}
-                    },
-                    exception_class=AgentExceptionClass.HARD_KILL,
-                    suggested_recovery=EscalationLevel.L4_SAFE_ABORT,
-                )
+                hk_envelope = _promote_to_hard_kill(envelope)
                 _safe_publish_dlq(bundle.dlq, hk_envelope)
                 _safe_record_hard_kill(bundle.metrics_collector, config.agent_id)
                 force_flush_exception_telemetry(bundle.exception_sink)
@@ -592,6 +626,51 @@ def _handle_tier(
     # HARD_KILL
     _safe_route(bundle.escalation_router, envelope)
     _safe_publish_dlq(bundle.dlq, envelope)
+    _safe_record_hard_kill(bundle.metrics_collector, config.agent_id)
+    force_flush_exception_telemetry(bundle.exception_sink)
+    raise AgentHardKillError(envelope)
+
+
+def _promote_to_hard_kill(envelope: AgentExceptionEnvelope) -> AgentExceptionEnvelope:
+    """Create a validated HARD_KILL envelope from a lower-tier envelope."""
+    return AgentExceptionEnvelope(
+        **{
+            key: value
+            for key, value in envelope.model_dump().items()
+            if key not in {"exception_class", "suggested_recovery", "sdk_version"}
+        },
+        exception_class=AgentExceptionClass.HARD_KILL,
+        suggested_recovery=EscalationLevel.L4_SAFE_ABORT,
+    )
+
+
+async def _handle_tier_async(
+    exc_class: AgentExceptionClass,
+    envelope: AgentExceptionEnvelope,
+    config: ResilientCallConfig,
+    bundle: ResilienceBundle,
+) -> Any:
+    """Async tier handling that awaits async-native DLQ publication."""
+    if exc_class in (AgentExceptionClass.EXCEPTION, AgentExceptionClass.ISSUE):
+        policy_result = _apply_recovery_policy(bundle, envelope)
+        if policy_result is not MISSING:
+            return policy_result
+        directive = _safe_route(bundle.escalation_router, envelope)
+        if directive is not None:
+            if directive.action == "resume":
+                return directive.resume_state
+            if directive.action == "abort":
+                hk_envelope = _promote_to_hard_kill(envelope)
+                await _safe_publish_dlq_async(bundle.dlq, hk_envelope)
+                _safe_record_hard_kill(bundle.metrics_collector, config.agent_id)
+                force_flush_exception_telemetry(bundle.exception_sink)
+                raise AgentHardKillError(hk_envelope)
+        if config.fallback_value is not MISSING:
+            return config.fallback_value
+        raise
+
+    _safe_route(bundle.escalation_router, envelope)
+    await _safe_publish_dlq_async(bundle.dlq, envelope)
     _safe_record_hard_kill(bundle.metrics_collector, config.agent_id)
     force_flush_exception_telemetry(bundle.exception_sink)
     raise AgentHardKillError(envelope)
@@ -663,11 +742,16 @@ async def _execute_resilient_async(
 
         # 2. Budget (inside try so exhaustion produces AgentHardKillError envelopes)
         bundle.agent_budget.consume_call()
+
         async def _call_fn() -> T:
-            if config.timeout_seconds is not None:
-                async with asyncio.timeout(config.timeout_seconds):
-                    return await fn(*args, **kwargs)
-            return await fn(*args, **kwargs)
+            try:
+                if config.timeout_seconds is not None:
+                    async with asyncio.timeout(config.timeout_seconds):
+                        return await fn(*args, **kwargs)
+                return await fn(*args, **kwargs)
+            except Exception:
+                bundle.agent_budget.record_failure()
+                raise
 
         async def _retry_fn() -> T:
             context = RetryContext(
@@ -686,7 +770,11 @@ async def _execute_resilient_async(
         if async_cb is not None:
             result = cast("T", await async_cb.call(_retry_fn))
         else:
-            result = await _retry_fn()
+            sync_cb = getattr(bundle, "circuit_breaker", None)
+            if sync_cb is not None and hasattr(sync_cb, "async_call"):
+                result = cast("T", await sync_cb.async_call(_retry_fn))
+            else:
+                result = await _retry_fn()
 
         # 6. Output validation
         validated = cast("T", bundle.output_validation_gate.validate(result))
@@ -715,8 +803,11 @@ async def _execute_resilient_async(
                 exception_class=envelope.exception_class,
             )
             _safe_emit(bundle.exception_sink, envelope)
-            _safe_publish(bundle.propagation_bus, envelope)
-            _handle_tier(envelope.exception_class, envelope, config, bundle)
+            await _safe_publish_async(bundle.propagation_bus, envelope)
+            return cast(
+                "T",
+                await _handle_tier_async(envelope.exception_class, envelope, config, bundle),
+            )
 
         if control is not None:
             raise control from None
@@ -739,8 +830,8 @@ async def _execute_resilient_async(
             exception_class=envelope.exception_class,
         )
         _safe_emit(bundle.exception_sink, envelope)
-        _safe_publish(bundle.propagation_bus, envelope)
-        _safe_publish_dlq(bundle.dlq, envelope)
+        await _safe_publish_async(bundle.propagation_bus, envelope)
+        await _safe_publish_dlq_async(bundle.dlq, envelope)
         _safe_route(bundle.escalation_router, envelope)
         if isinstance(sdk_exc, BudgetExhaustedError):
             _safe_record_budget_exhausted(bundle.metrics_collector)
@@ -758,8 +849,11 @@ async def _execute_resilient_async(
             exception_class=envelope.exception_class,
         )
         _safe_emit(bundle.exception_sink, envelope)
-        _safe_publish(bundle.propagation_bus, envelope)
-        return cast("T", _handle_tier(envelope.exception_class, envelope, config, bundle))
+        await _safe_publish_async(bundle.propagation_bus, envelope)
+        return cast(
+            "T",
+            await _handle_tier_async(envelope.exception_class, envelope, config, bundle),
+        )
 
 
 def resilient(
@@ -802,6 +896,7 @@ def resilient(
         ToolKindMismatchError: If the decorated function is a coroutine function.
         ToolKindMismatchError: If timeout_seconds is set and allow_sync_llm_timeout is False.
     """
+
     def decorator(fn: Callable[P, T]) -> Callable[P, T]:
         if inspect.iscoroutinefunction(fn):
             raise ToolKindMismatchError(
@@ -859,6 +954,7 @@ def async_resilient(
     Raises:
         ToolKindMismatchError: If the decorated function is not a coroutine function.
     """
+
     def decorator(fn: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         if not inspect.iscoroutinefunction(fn):
             raise ToolKindMismatchError(
