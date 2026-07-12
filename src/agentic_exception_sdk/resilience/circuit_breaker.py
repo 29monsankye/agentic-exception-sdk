@@ -17,7 +17,10 @@ from enum import Enum
 from typing import Protocol, TypeVar, runtime_checkable
 from urllib.parse import urlsplit
 
-from agentic_exception_sdk.taxonomy.errors import CircuitBreakerStateUnavailableError
+from agentic_exception_sdk.taxonomy.errors import (
+    BudgetExhaustedError,
+    CircuitBreakerStateUnavailableError,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -200,6 +203,14 @@ class InMemoryCircuitBreaker:
 
         try:
             result = fn()
+        except BudgetExhaustedError:
+            # Budget exhaustion is an internal control signal, not a downstream
+            # fault. It must not trip the breaker or consume its failure budget;
+            # just release any probe slot we admitted and propagate.
+            with self._lock:
+                if admitted_probe:
+                    self._probe_in_flight_count = max(0, self._probe_in_flight_count - 1)
+            raise
         except Exception:
             with self._lock:
                 if self._state == CircuitState.HALF_OPEN:
@@ -264,6 +275,14 @@ class InMemoryCircuitBreaker:
 
         try:
             result = await fn()
+        except BudgetExhaustedError:
+            # Budget exhaustion is an internal control signal, not a downstream
+            # fault. It must not trip the breaker or consume its failure budget;
+            # just release any probe slot we admitted and propagate.
+            with self._lock:
+                if admitted_probe:
+                    self._probe_in_flight_count = max(0, self._probe_in_flight_count - 1)
+            raise
         except Exception:
             with self._lock:
                 if self._state == CircuitState.HALF_OPEN:
