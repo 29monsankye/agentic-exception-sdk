@@ -91,9 +91,44 @@ class ConsensusGate:
                     f"for correlation_id={key}"
                 )
 
+    def votes_for(self, correlation_id: str | None = None) -> int:
+        """Return the vote count for a specific correlation window.
+
+        Args:
+            correlation_id: Window to read; defaults to the gate's configured
+                correlation_id (or the shared "global" window).
+        """
+        key = correlation_id or self._correlation_id or "global"
+        with self._lock:
+            return self._votes.get(key, 0)
+
+    def reset(self, correlation_id: str | None = None) -> None:
+        """Drop stored votes for one correlation window.
+
+        Callers must invoke this (or clear()) once a correlation window is
+        resolved; otherwise per-correlation vote counters accumulate for the
+        lifetime of the gate and leak memory on long-lived orchestrators.
+
+        Args:
+            correlation_id: Window to drop; defaults to the gate's configured
+                correlation_id (or the shared "global" window).
+        """
+        key = correlation_id or self._correlation_id or "global"
+        with self._lock:
+            self._votes.pop(key, None)
+
+    def clear(self) -> None:
+        """Drop every stored vote counter across all correlation windows."""
+        with self._lock:
+            self._votes.clear()
+
     @property
     def vote_count(self) -> int:
-        """Current vote count (thread-safe snapshot)."""
+        """Vote count for the gate's default correlation window (snapshot).
+
+        Reads the gate's configured correlation_id window (or "global"). Use
+        votes_for(correlation_id) to read envelope-keyed windows.
+        """
         key = self._correlation_id or "global"
         with self._lock:
             return self._votes.get(key, 0)

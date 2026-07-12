@@ -52,10 +52,25 @@ else:
 
 RE2_AVAILABLE: bool = _RE2_AVAILABLE
 
-# Sensitive context key patterns for snapshot redaction
-_SENSITIVE_KEY_RE: re.Pattern[str] = re.compile(
-    r"(?i).*(password|passwd|token|secret|key|credential|auth|api_?key).*"
+# Sensitive context-key detection. A key is redacted when any of its
+# delimiter- or camelCase-separated segments is a sensitive word. This catches
+# "stripe_token", "api_key", "accessToken" and bare "password"/"key" while
+# avoiding false positives on ordinary words that merely *contain* a sensitive
+# substring (e.g. "author", "monkey", "keyword", "turkey").
+_SENSITIVE_KEY_SEGMENTS: frozenset[str] = frozenset(
+    {"password", "passwd", "token", "secret", "key", "credential", "auth", "apikey"}
 )
+# Split on any non-alphanumeric run and at lowercase->uppercase camelCase seams.
+_KEY_SEGMENT_RE: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _is_sensitive_key(key: str) -> bool:
+    """Return True when a context key names a sensitive field."""
+    return any(
+        segment.lower() in _SENSITIVE_KEY_SEGMENTS
+        for segment in _KEY_SEGMENT_RE.split(key)
+        if segment
+    )
 
 # Precompiled ReDoS-resistant redaction patterns.
 # All patterns avoid nested quantifiers and ambiguous .* constructs.
@@ -346,7 +361,7 @@ class TrustBoundaryValidator:
             items = list(node.items())[:SAFE_CONTEXT_MAX_KEYS]
             for k, v in items:
                 key_str = str(k) if not isinstance(k, str) else k
-                if _SENSITIVE_KEY_RE.match(key_str):
+                if _is_sensitive_key(key_str):
                     result[key_str] = REDACTED
                 else:
                     result[key_str] = self._sanitize_node(v, depth + 1, start)

@@ -62,11 +62,42 @@ SAFE_IDENTIFIER_RE: re.Pattern[str] = re.compile(r"^[a-z0-9_-]{1,128}$")
 # Declared with default=False so .get() never raises LookupError.
 _in_exception_side_effect: ContextVar[bool] = ContextVar("in_exception_side_effect", default=False)
 
+_DEFAULT_SYNC_TIMEOUT_WORKERS = 128
+
+
+def _sync_timeout_workers() -> int:
+    """Resolve the sync-timeout pool size from the environment, safely.
+
+    A malformed or non-positive ``SDK_SYNC_TIMEOUT_WORKERS`` must never crash
+    the SDK at import time; fall back to the default and log instead.
+    """
+    raw = os.environ.get("SDK_SYNC_TIMEOUT_WORKERS")
+    if raw is None:
+        return _DEFAULT_SYNC_TIMEOUT_WORKERS
+    try:
+        value = int(raw)
+    except ValueError:
+        _log.warning(
+            "invalid SDK_SYNC_TIMEOUT_WORKERS=%r; falling back to %d",
+            raw,
+            _DEFAULT_SYNC_TIMEOUT_WORKERS,
+        )
+        return _DEFAULT_SYNC_TIMEOUT_WORKERS
+    if value < 1:
+        _log.warning(
+            "SDK_SYNC_TIMEOUT_WORKERS=%d must be >= 1; falling back to %d",
+            value,
+            _DEFAULT_SYNC_TIMEOUT_WORKERS,
+        )
+        return _DEFAULT_SYNC_TIMEOUT_WORKERS
+    return value
+
+
 # Thread-pool for bounded sync timeout execution (one per interpreter process).
 # Not per-bundle — keeping a global bounded pool avoids resource leaks when
 # ResilienceBundle instances are created and discarded frequently.
 _SYNC_TIMEOUT_EXECUTOR: ThreadPoolExecutor = ThreadPoolExecutor(
-    max_workers=int(os.environ.get("SDK_SYNC_TIMEOUT_WORKERS", "128")),
+    max_workers=_sync_timeout_workers(),
     thread_name_prefix="sdk-resilient-timeout",
 )
 
@@ -191,6 +222,28 @@ def _safe_emit(sink: object, envelope: AgentExceptionEnvelope) -> None:
         _in_exception_side_effect.reset(token)
 
 
+def _drain_coroutine(coro: Any) -> None:
+    """Drive an async publish coroutine to completion from a sync context.
+
+    Bundles are shared between sync ``resilient()`` and async ``async_resilient()``
+    wrappers, so the sync pipeline may be handed an async-native bus/DLQ whose
+    ``publish`` returns a coroutine. Without awaiting it the envelope is silently
+    dropped (and a "coroutine was never awaited" warning is emitted), so the
+    sync path drives it here instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop in this thread: safe to drive the coroutine directly.
+        asyncio.run(coro)
+        return
+    # A loop is already running in this thread (unexpected on the sync path):
+    # complete the coroutine on a dedicated worker thread so we neither block
+    # nor re-enter the running loop.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(asyncio.run, coro).result()
+
+
 def _safe_publish(bus: object, envelope: AgentExceptionEnvelope) -> None:
     """Publish envelope to bus with failure isolation and re-entrancy guard.
 
@@ -205,7 +258,9 @@ def _safe_publish(bus: object, envelope: AgentExceptionEnvelope) -> None:
     try:
         publish = getattr(bus, "publish", None)
         if callable(publish):
-            publish(envelope)
+            result = publish(envelope)
+            if inspect.iscoroutine(result):
+                _drain_coroutine(result)
     except Exception:
         _log.debug("propagation_bus.publish failed; ignoring")
     finally:
@@ -218,7 +273,9 @@ def _safe_publish_dlq(dlq: object, envelope: AgentExceptionEnvelope) -> None:
     if not callable(publish):
         return
     try:
-        publish(envelope)
+        result = publish(envelope)
+        if inspect.iscoroutine(result):
+            _drain_coroutine(result)
     except Exception:
         _log.debug("DLQ publish failed; ignoring")
 
