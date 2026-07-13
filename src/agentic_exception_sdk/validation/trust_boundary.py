@@ -58,7 +58,20 @@ RE2_AVAILABLE: bool = _RE2_AVAILABLE
 # avoiding false positives on ordinary words that merely *contain* a sensitive
 # substring (e.g. "author", "monkey", "keyword", "turkey").
 _SENSITIVE_KEY_SEGMENTS: frozenset[str] = frozenset(
-    {"password", "passwd", "token", "secret", "key", "credential", "auth", "apikey"}
+    {
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "key",
+        "credential",
+        "auth",
+        "authorization",
+        "apikey",
+        "bearer",
+        "cookie",
+        "session",
+    }
 )
 # Split on any non-alphanumeric run and at lowercase->uppercase camelCase seams.
 _KEY_SEGMENT_RE: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
@@ -101,10 +114,11 @@ _REDACTION_PATTERNS: list[tuple[Any, str]] = [
     # GitHub PATs
     (_re_engine.compile(r"(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{20,255}"), REDACTED),
     (_re_engine.compile(r"github_pat_[a-zA-Z0-9_]{20,255}"), REDACTED),
-    # OpenAI key
-    (_re_engine.compile(r"sk-[a-zA-Z0-9]{20,255}"), REDACTED),
-    # Anthropic key
-    (_re_engine.compile(r"sk-ant-[a-zA-Z0-9\-]{20,255}"), REDACTED),
+    # OpenAI keys — include '-' and '_' so project/scoped forms like
+    # "sk-proj-..." and "sk-svcacct-..." are covered (also matches "sk-ant-...").
+    (_re_engine.compile(r"sk-[a-zA-Z0-9_-]{20,255}"), REDACTED),
+    # Anthropic key — 'sk-ant-api03-...' contains '_' and '-'.
+    (_re_engine.compile(r"sk-ant-[a-zA-Z0-9_-]{20,255}"), REDACTED),
     # JWTs: base64url.base64url.base64url
     (
         _re_engine.compile(

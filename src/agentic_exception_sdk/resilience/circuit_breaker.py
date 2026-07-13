@@ -450,8 +450,9 @@ class RedisCircuitBreaker:
     """Redis-backed distributed circuit breaker.
 
     Requires the ``redis`` extra: ``pip install agentic-exception-sdk[redis]``.
-    Full implementation requires the agentic-exception-iac circuit_breaker_state
-    Terraform module. Redis URL must use ``rediss://`` (TLS), AUTH/ACLs, and keys
+    Expects an externally provisioned Redis state store (e.g. a
+    Terraform-managed cluster) exposing a versioned ``circuit_breaker_state``
+    keyspace. Redis URL must use ``rediss://`` (TLS), AUTH/ACLs, and keys
     namespaced by SDK version, environment, and logical circuit name.
 
     Fails closed (raises CircuitBreakerStateUnavailableError) when Redis state
