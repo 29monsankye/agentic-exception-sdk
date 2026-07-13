@@ -9,12 +9,43 @@ description = "Domain-agnostic exception management SDK for agentic systems"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "29monsankye", email = "29monsank@gmail.com" }]
+maintainers = [{ name = "29monsankye", email = "29monsank@gmail.com" }]
+keywords = [
+    "agentic",
+    "agents",
+    "llm",
+    "exception-handling",
+    "resilience",
+    "circuit-breaker",
+    "observability",
+    "sdk",
+]
+# NOTE: no "License :: OSI Approved :: MIT License" classifier — the PEP 639
+# `license = "MIT"` SPDX expression above is authoritative and modern setuptools
+# rejects mixing the two.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 requires-python = ">=3.11"
 dependencies = [
     "jcs>=0.2.1",
     "pydantic>=2.0.0",
     "uuid-utils>=0.10.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/29monsankye/agentic-exception-sdk"
+Repository = "https://github.com/29monsankye/agentic-exception-sdk"
+Issues = "https://github.com/29monsankye/agentic-exception-sdk/issues"
 
 [project.optional-dependencies]
 otel = [
