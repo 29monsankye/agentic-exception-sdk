@@ -1,0 +1,52 @@
+name: Quality Gate
+
+on:
+  pull_request:
+
+jobs:
+  package-and-quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install quality tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install build twine mutmut
+      - name: Build artifacts
+        run: python -m build
+      - name: Twine check
+        run: python -m twine check dist/*
+      - name: Install wheel in clean venv
+        run: |
+          python -m venv /tmp/agentic-exception-sdk-venv
+          /tmp/agentic-exception-sdk-venv/bin/python -m pip install dist/*.whl
+          /tmp/agentic-exception-sdk-venv/bin/python -c "import agentic_exception_sdk; print(agentic_exception_sdk.__version__)"
+      - name: py.typed present in wheel
+        run: |
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheels = list(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("no wheel built")
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = set(wheel.namelist())
+          if "agentic_exception_sdk/py.typed" not in names:
+              raise SystemExit("agentic_exception_sdk/py.typed missing from wheel")
+          PY
+      - name: Branch coverage on critical modules
+        run: |
+          python -m pytest tests/             --cov=agentic_exception_sdk.taxonomy.classifier             --cov=agentic_exception_sdk.validation.trust_boundary             --cov=agentic_exception_sdk.validation.guard_rails             --cov=agentic_exception_sdk.resilience.wrap             --cov=agentic_exception_sdk.taxonomy.envelope             --cov=agentic_exception_sdk.resilience.retry             --cov=agentic_exception_sdk.resilience.circuit_breaker             --cov-branch --cov-fail-under=90
+      - name: Mutmut scoped mutation smoke
+        if: matrix.python-version == '3.12'
+        run: python -m mutmut run
