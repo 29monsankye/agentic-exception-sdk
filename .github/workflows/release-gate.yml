@@ -1,0 +1,58 @@
+name: Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: Release candidate version or ref
+        required: true
+
+jobs:
+  release-validation:
+    runs-on: self-hosted
+    timeout-minutes: 180
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build release artifacts
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine cyclonedx-bom
+          python -m build
+          python -m twine check dist/*
+      - name: Install wheel with release extras
+        run: |
+          python -m venv /tmp/agentic-exception-release
+          wheel="$(ls dist/*.whl)"
+          /tmp/agentic-exception-release/bin/python -m pip install "${wheel}[otel,prometheus]"
+      - name: Benchmarks against installed wheel
+        run: |
+          /tmp/agentic-exception-release/bin/python -m pip install pytest pytest-benchmark
+          /tmp/agentic-exception-release/bin/python -m pytest benchmarks/ --benchmark-json benchmark-results.json
+      - name: SBOM
+        run: cyclonedx-py environment --output-file sbom.json
+      - name: Attest build provenance (Sigstore / PEP 740)
+        id: attest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Verify attestation
+        run: |
+          gh attestation verify dist/*.whl --owner ${{ github.repository_owner }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-artifacts
+          path: |
+            dist/*
+            benchmark-results.json
+            sbom.json
+            ${{ steps.attest.outputs.bundle-path }}
