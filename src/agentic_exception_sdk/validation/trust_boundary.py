@@ -242,9 +242,9 @@ class TrustBoundaryValidator:
             start: The monotonic clock reading the budget is measured from.
 
         Returns:
-            The redacted string, or ``None`` if the budget was exceeded — in which
-            case the caller must substitute REDACTED_BUDGET (fail closed) rather
-            than return partially-scanned text.
+            The redacted string, or ``None`` if the budget was exceeded or a
+            pattern raised — in which case the caller must substitute
+            REDACTED_BUDGET (fail closed) rather than return partially-scanned text.
         """
         result = text
         for pattern, replacement in _REDACTION_PATTERNS:
@@ -252,8 +252,14 @@ class TrustBoundaryValidator:
             if elapsed_ms > REDACTION_BUDGET_MS:
                 self._incr("sanitizer_redaction_timeout_total")
                 return None
-            with suppress(Exception):
+            try:
                 result = pattern.sub(replacement, result)
+            except Exception:
+                # Fail closed: a crashing pattern must not let partially-scanned
+                # (possibly unredacted) text through. Caller substitutes REDACTED_BUDGET.
+                self._incr("sanitizer_redaction_error_total")
+                _log.warning("redaction pattern sub failed; failing closed")
+                return None
         return result
 
     def safe_identifier(self, value: object) -> str:

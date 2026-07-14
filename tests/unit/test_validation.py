@@ -322,3 +322,19 @@ def test_canonicalize_cache_returns_consistent_results() -> None:
     assert tb.canonicalize_tool_name("Book_Hotel") == "book_hotel"
     assert tb.canonicalize_tool_name("Search_Flights") == "search_flights"  # cache hit
     assert tb.canonicalize_tool_name("Book_Hotel") == "book_hotel"  # cache hit
+
+
+def test_redactor_fails_closed_on_pattern_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crashing redaction pattern must fail closed, not leak partially-scanned text."""
+    from agentic_exception_sdk.validation import trust_boundary
+
+    class _BrokenPattern:
+        def sub(self, replacement: str, string: str) -> str:
+            raise RuntimeError("regex engine crash")
+
+    monkeypatch.setattr(
+        trust_boundary, "_REDACTION_PATTERNS", [(_BrokenPattern(), trust_boundary.REDACTED)]
+    )
+    tb = TrustBoundaryValidator()
+    # A single pattern raising must yield the fully-redacted sentinel, never the raw text.
+    assert tb.safe_exception_message(ValueError("secret=sk-abc123")) == trust_boundary.REDACTED_BUDGET
