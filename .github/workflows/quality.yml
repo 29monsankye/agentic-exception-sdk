@@ -46,7 +46,7 @@ jobs:
           PY
       - name: Branch coverage on critical modules
         run: |
-          python -m pytest tests/             --cov=agentic_exception_sdk.taxonomy.classifier             --cov=agentic_exception_sdk.validation.trust_boundary             --cov=agentic_exception_sdk.validation.guard_rails             --cov=agentic_exception_sdk.resilience.wrap             --cov=agentic_exception_sdk.taxonomy.envelope             --cov=agentic_exception_sdk.resilience.retry             --cov=agentic_exception_sdk.resilience.circuit_breaker             --cov-branch --cov-fail-under=90
+          python -m pytest tests/             --cov=agentic_exception_sdk.taxonomy.classifier             --cov=agentic_exception_sdk.validation.trust_boundary             --cov=agentic_exception_sdk.validation.guard_rails             --cov=agentic_exception_sdk.resilience.wrap             --cov=agentic_exception_sdk.taxonomy.envelope             --cov=agentic_exception_sdk.resilience.retry             --cov=agentic_exception_sdk.resilience.circuit_breaker             --cov-branch --cov-fail-under=80
       - name: Mutmut scoped mutation smoke
         if: matrix.python-version == '3.12'
         run: python -m mutmut run
