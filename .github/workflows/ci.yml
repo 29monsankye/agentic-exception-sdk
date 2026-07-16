@@ -18,12 +18,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+      # Static analysis targets the shipped package only. The
+      # agentic_exception_sdk_examples/ tree is demo code that imports optional
+      # frameworks (crewai, langgraph) and a sibling adapters package not
+      # installed in CI, and is excluded from the wheel — linting/typechecking
+      # it under --strict here would gate the SDK on uninstalled deps.
       - name: Ruff
-        run: python -m ruff check src tests
+        run: python -m ruff check src/agentic_exception_sdk tests
       - name: Mypy strict
-        run: python -m mypy --strict --ignore-missing-imports src
+        run: python -m mypy --strict --ignore-missing-imports src/agentic_exception_sdk
       - name: Bandit
-        run: python -m bandit -r src
+        run: python -m bandit -r src/agentic_exception_sdk
       - name: pip-audit
         run: python -m pip_audit
       - name: Pytest
