@@ -337,4 +337,5 @@ def test_redactor_fails_closed_on_pattern_error(monkeypatch: pytest.MonkeyPatch)
     )
     tb = TrustBoundaryValidator()
     # A single pattern raising must yield the fully-redacted sentinel, never the raw text.
-    assert tb.safe_exception_message(ValueError("secret=sk-abc123")) == trust_boundary.REDACTED_BUDGET
+    result = tb.safe_exception_message(ValueError("secret=sk-abc123"))
+    assert result == trust_boundary.REDACTED_BUDGET
