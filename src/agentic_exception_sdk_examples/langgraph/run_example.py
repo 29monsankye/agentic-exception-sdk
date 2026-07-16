@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from agentic_exception_sdk import AgentHardKillError
-
 from agentic_exception_sdk_examples.langgraph.graph import run_scenario
 from agentic_exception_sdk_examples.langgraph.state import ScenarioInput
 

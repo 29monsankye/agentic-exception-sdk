@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentic_exception_adapters import ResilientBaseTool
+
 from agentic_exception_sdk import (
     ExponentialBackoffRetry,
     InMemoryBus,
     PromptInjectionError,
     ResilienceBundle,
 )
-
-from agentic_exception_adapters import ResilientBaseTool
 
 try:
     import crewai as _crewai

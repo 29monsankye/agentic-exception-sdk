@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from agentic_exception_sdk import AgentHardKillError
-
 from agentic_exception_sdk_examples.crewai.crew import run_scenario
 
 
