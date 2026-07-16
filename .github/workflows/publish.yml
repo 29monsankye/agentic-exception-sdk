@@ -18,6 +18,11 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  # Manual fallback: the release event does not fire reliably for a
+  # workflow added after a release already exists. Run this from the
+  # Actions tab (or `gh workflow run publish.yml`) to publish the current
+  # main state.
+  workflow_dispatch:
 
 permissions: {}
 
