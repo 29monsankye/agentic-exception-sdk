@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_exception_sdk import InMemoryBus
-
 from agentic_exception_sdk_examples.crewai.tools import build_tools
 
 

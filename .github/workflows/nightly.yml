@@ -21,3 +21,5 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Core tests with Hypothesis statistics
         run: HYPOTHESIS_PROFILE=ci python -m pytest tests/ --hypothesis-show-statistics
+      - name: Mutmut scoped mutation smoke
+        run: HYPOTHESIS_PROFILE=mutmut python -m mutmut run

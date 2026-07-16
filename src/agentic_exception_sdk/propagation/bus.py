@@ -11,7 +11,6 @@ import asyncio
 import threading
 from typing import Protocol, runtime_checkable
 
-
 from agentic_exception_sdk.taxonomy.envelope import AgentExceptionEnvelope
 
 __all__ = [

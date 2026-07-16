@@ -146,6 +146,8 @@ ignore_missing_imports = true
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# .pyi stubs are auto-generated (stubgen) and shipped as-is; don't lint generated code.
+extend-exclude = ["*.pyi"]
 
 [tool.ruff.lint]
 select = [

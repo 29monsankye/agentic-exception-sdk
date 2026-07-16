@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 
 import pytest
+from hypothesis import HealthCheck, settings
 
 from agentic_exception_sdk import (
     AgentExceptionClass,
@@ -16,6 +18,21 @@ from agentic_exception_sdk import (
     SafeContextSnapshot,
 )
 from agentic_exception_sdk.propagation.bus import InMemoryBus
+
+# Hypothesis profiles, selected via the HYPOTHESIS_PROFILE env var.
+#   default — local/CI defaults.
+#   ci      — no per-example deadline, avoiding flaky timing failures under load.
+#   mutmut  — mutmut re-runs the suite from a separate executor, which trips
+#             Hypothesis' differing_executors health check. That check only
+#             guards example-DB replay reproducibility, so it is a false
+#             positive here; suppress it for the mutmut run only.
+settings.register_profile("default", settings())
+settings.register_profile("ci", settings(deadline=None))
+settings.register_profile(
+    "mutmut",
+    settings(deadline=None, suppress_health_check=[HealthCheck.differing_executors]),
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 def make_envelope(
