@@ -1,9 +1,13 @@
 # agentic-exception-sdk
 
-A domain-agnostic exception management SDK for agentic systems. Classifies
-failures into three tiers, routes them through pluggable handlers, wraps tool
-boundaries with resilient call wrappers, and provides safe no-op defaults for
-zero-config adoption.
+A domain-agnostic exception management SDK for agentic systems. Classifies the
+exceptions your code raises into three tiers, routes them through pluggable
+handlers, wraps tool boundaries with resilient call wrappers, and provides safe
+no-op defaults for zero-config adoption.
+
+The SDK governs what happens **after** a failure surfaces as a raised exception.
+It does not detect failures itself — see
+[What the classifier does and does not do](#what-the-classifier-does-and-does-not-do).
 
 Designed as a **standalone Python package** installed and wired into host
 projects via constructor injection. Contains no host-specific imports, no global
@@ -25,6 +29,32 @@ Every failure is assigned to exactly one class:
 
 `HARD_KILL` raises `AgentHardKillError(BaseException)` — it is never caught by
 `except Exception` anywhere in the call stack.
+
+### What the classifier does and does not do
+
+The classifier maps **exception types your code raises** onto these tiers. It is
+type dispatch, not analysis:
+
+```python
+# Your guardrail, model, or validator decides this is an injection attempt:
+raise PromptInjectionError("...")
+
+# From here the SDK takes over: classify HARD_KILL -> abort un-catchably
+# -> redact -> write the envelope to the DLQ -> escalate at L4.
+```
+
+**The SDK does not detect prompt injection, jailbreaks, hallucination, or
+planning failures.** It contains no scanners, heuristics, or model calls for
+them, and it cannot notice a failure that never raises (a plausible-looking wrong
+answer, or a loop of individually-valid steps — for loops and runaway cost, use
+`BudgetWatchdog`, which *does* enforce ceilings).
+
+Detection is your model's, guardrail's, or validation layer's job — NeMo
+Guardrails, Bedrock Guardrails, a Pydantic validator, your own check.
+`PromptInjectionError` and friends are provided as first-class error types so
+that hand-off boundary is explicit and typed, **not** because the SDK finds
+injections. Once something raises, the SDK decides what the failure means, what
+happens next, and what gets recorded.
 
 ---
 
@@ -172,8 +202,14 @@ bundle = ResilienceBundle(
   Every envelope carries a full-envelope integrity leaf hash (`envelope_leaf_hash()`),
   distinct from the `envelope_canonical_sha256()` dedup key. The default in-process
   `NullProvider` computes real leaf hashes and in-memory Merkle roots but emits
-  unsigned, non-durable checkpoints. `sentirock.attestation()` reports the active
-  provider's capabilities (`durable`, `checkpoint_signing`, `worm`).
+  unsigned, non-durable checkpoints. `attestation()` reports the active
+  provider's capabilities:
+
+  ```python
+  from agentic_exception_sdk import attestation
+
+  attestation()  # {'durable': False, 'checkpoint_signing': False, 'worm': False}
+  ```
 
 ## Integrity & audit status
 
@@ -211,10 +247,11 @@ for chunk in StreamingBudgetGuard.wrap_sync_stream(
 
 The SDK's controls are **mitigations, not guarantees**, and are not a substitute for defense-in-depth. Please read this before relying on the SDK for a security- or compliance-critical outcome:
 
+- **The SDK detects nothing; it routes what you raise.** Classification is type dispatch over exceptions your code raises — it is not detection. The SDK cannot see a prompt injection, a hallucination, or a wrong-but-plausible answer that never raises. Pair it with a real detection layer; see [What the classifier does and does not do](#what-the-classifier-does-and-does-not-do).
 - **Redaction is best-effort.** The trust-boundary sanitizer is pattern-based; novel, split, or obfuscated secrets can pass through. It is not a substitute for a dedicated DLP control, and should not be your sole barrier against secret exposure.
 - **`HARD_KILL` is in-execution termination, not an operator kill switch.** `AgentHardKillError` stops the agent's *own run* when a tripwire fires. It is **not** an out-of-band control that deactivates a running agent, agent type, or fleet on demand — that capability is on the roadmap. Do not represent it as a fleet-wide or human-pullable deactivation switch.
 - **`AgentHardKillError` extends `BaseException` — mind your runtime.** This is deliberate (it survives `except Exception`), but runtimes that treat `BaseException` as fatal (Celery workers, some ASGI/thread-pool executors) may tear down the worker when it propagates. Catch it at your outermost executor boundary and translate it to your runtime's shutdown/abort convention; do not let it escape uncaught into a shared worker pool.
-- **Integrity hashing is not a durable audit trail by default.** The in-process provider emits unsigned, non-durable checkpoints and attests this via `sentirock.attestation()` (`durable=false`). Durable, signed, WORM-retained audit is delivered by the enterprise substrate on the roadmap.
+- **Integrity hashing is not a durable audit trail by default.** The in-process provider emits unsigned, non-durable checkpoints and attests this via `attestation()` (`durable=False`). Durable, signed, WORM-retained audit is delivered by the enterprise substrate on the roadmap.
 - **Not a compliance certification.** Any coverage mapping (e.g. to the OWASP LLM Top 10) documents what the SDK *does*; it does not make your system compliant with any regulation. Compliance is a property of your overall system and processes.
 - **No warranty.** Provided under the MIT License, **"AS IS," without warranty of any kind** (see [LICENSE](LICENSE)). You are responsible for validating its behavior in your own environment.
 
